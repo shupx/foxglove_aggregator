@@ -200,9 +200,11 @@ class Aggregator:
 
     def server_capabilities(self) -> list[str]:
         capabilities: list[str] = []
-        if self.upstreams:
+        if self.upstreams.get("ros"):
+            # Report clientPublish capability if ROS1 bridge is enabled. Custom servers only support assets but not clientPublish.
             capabilities.append("clientPublish")
         if self.config.custom or self.config.local_asset_root:
+            # Report asset capability if any custom server is enabled or local asset root is configured, so that Studio can fetch assets from the aggregator. Not fetch assets from ros1 here.
             capabilities.append("assets")
         return capabilities
 
@@ -211,6 +213,13 @@ class Aggregator:
             return []
         encodings = {"json", "protobuf", "flatbuffer", "ros1"}
         return sorted(encodings)
+
+    def server_metadata(self) -> dict[str, str]:
+        if self.upstreams.get("ros"):
+            # Important to report this supports ROS1 for foxglove studio client to configure ROS1-compatible features like click tools in the 3D panel.
+            return {"ROS_DISTRO": "noetic"}
+        else:
+            return {}
 
     async def serve(self) -> None:
         host, port = parse_listen(self.config.listen)
@@ -240,20 +249,20 @@ class Aggregator:
         self.frontend_clients[client.id] = client
         logging.info("frontend client %s connected", client.id)
         try:
+            # send once when a client (foxglove studio) connects.
             await client.send_json(
                 {
                     "op": "serverInfo",
                     "name": "foxglove-flexible-aggregator",
                     "capabilities": self.server_capabilities(),
                     "supportedEncodings": self.supported_encodings(),
-                    "metadata": {
-                        "upstreams": ",".join(self.upstreams.keys()),
-                    },
+                    "metadata": self.server_metadata(),
                     "sessionId": str(int(time.time() * 1000)),
                 }
             )
             await self.send_existing_channels(client)
             async for message in ws:
+                # keep handling messages until the client disconnects.
                 await self.handle_frontend_message(client, message)
         except ConnectionClosed:
             pass
@@ -478,6 +487,7 @@ class Aggregator:
 
         op = payload.get("op")
         if op == "serverInfo":
+            print(f"\n\033[032mReceived upstream '{upstream.name}' serverInfo: {payload}\033[0m\n")
             upstream.capabilities = list(payload.get("capabilities", []))
             upstream.supported_encodings = list(payload.get("supportedEncodings", []))
             logging.info("upstream %s serverInfo capabilities=%s", upstream.name, payload.get("capabilities", []))
