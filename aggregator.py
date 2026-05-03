@@ -134,6 +134,8 @@ class Upstream:
         self.subscription_ids = IdAllocator(1)
         self.client_channel_ids = IdAllocator(1)
         self.asset_request_ids = IdAllocator(1)
+        self.capabilities: list[str] = []
+        self.supported_encodings: list[str] = []
 
     async def run_forever(self) -> None:
         while True:
@@ -148,6 +150,11 @@ class Upstream:
 
     async def _connect_and_read(self) -> None:
         logging.info("connecting upstream %s at %s", self.name, self.url)
+        # subprotocols = (
+        #     [SDK_V1_SUBPROTOCOL]
+        #     if self.kind == "custom"
+        #     else [FOXGLOVE_V1_SUBPROTOCOL]
+        # )
         async with websockets.connect(
             self.url,
             subprotocols=[FOXGLOVE_V1_SUBPROTOCOL, SDK_V1_SUBPROTOCOL],
@@ -193,16 +200,21 @@ class Aggregator:
 
     def server_capabilities(self) -> list[str]:
         capabilities: list[str] = []
-        if self.upstreams:
+        if any(
+            upstream.connected and "clientPublish" in upstream.capabilities
+            for upstream in self.upstreams.values()
+        ):
             capabilities.append("clientPublish")
         if self.config.custom or self.config.local_asset_root:
             capabilities.append("assets")
         return capabilities
 
     def supported_encodings(self) -> list[str]:
-        if not self.upstreams:
-            return []
-        encodings = {"json", "protobuf", "flatbuffer", "ros1"}
+        encodings: set[str] = set()
+        for upstream in self.upstreams.values():
+            if not upstream.connected or "clientPublish" not in upstream.capabilities:
+                continue
+            encodings.update(upstream.supported_encodings)
         return sorted(encodings)
 
     async def serve(self) -> None:
@@ -255,15 +267,16 @@ class Aggregator:
             logging.info("frontend client %s disconnected", client.id)
 
     async def send_existing_channels(self, client: FrontendClient) -> None:
-        channels = []
+        channels_by_upstream: dict[str, list[dict[str, Any]]] = {}
         async with self._lock:
             for ref in self.channels_by_frontend_id.values():
                 upstream = self.upstreams.get(ref.upstream)
                 if upstream is None:
                     continue
-                channels.append(dict(ref.channel_msg))
-        if channels:
-            await client.send_json({"op": "advertise", "channels": channels})
+                channels_by_upstream.setdefault(ref.upstream, []).append(dict(ref.channel_msg))
+        for channels in channels_by_upstream.values():
+            if channels:
+                await client.send_json({"op": "advertise", "channels": channels})
 
     async def frontend_disconnected(self, client: FrontendClient) -> None:
         self.frontend_clients.pop(client.id, None)
@@ -470,6 +483,8 @@ class Aggregator:
 
         op = payload.get("op")
         if op == "serverInfo":
+            upstream.capabilities = list(payload.get("capabilities", []))
+            upstream.supported_encodings = list(payload.get("supportedEncodings", []))
             logging.info("upstream %s serverInfo capabilities=%s", upstream.name, payload.get("capabilities", []))
         elif op == "advertise":
             await self.handle_upstream_advertise(upstream, payload)
