@@ -4,6 +4,51 @@ This is a protocol-level Foxglove WebSocket v1 aggregator. Foxglove Studio conne
 aggregator URL while the aggregator relays channels from an optional ROS1 `foxglove_bridge` and
 zero or more custom Foxglove SDK servers.
 
+## Architecture
+
+```text
+        .--------------------.
+        |  Foxglove Studio   |
+        |  (inner ws client) |
+        '---------+----------'
+                  ^
+                  | one Foxglove WebSocket connection
+                  | subscribe / publish / fetchAsset
+                  v
+        .--------------------.
+        |     Aggregator     |
+        | ws://host::8765    |
+        |                    |
+        |  topic id map      |
+        |  subscription map  |
+        |  clientPublish map |
+        |  asset request map |
+        '----+----------+------------------------+----'
+             ^          ^          ^ custom topics / assets / 
+     ros1    |          |          |  non-ros1 publish
+ clientPublish          |          |____________________
+             v          v                               v
+ .----------------.  .--------------------.  .--------------------.
+ | ROS1 foxglove  |  | custom_a SDK server |  | custom_b SDK server |
+ | bridge         |  | :18767              |  | :18768              |
+ |    :18766      |  |                     |  |                     |
+ | ros1 topics    |  | /custom_a/pose      |  | /custom_b/...       |
+ | ros1 publish   |  | /custom_a/markers   |  | package://assets    |
+ '----------------'  | /custom_a/tf        |  '---------------------'
+                     | package://assets    |
+                     '---------------------'
+```
+
+Routing summary:
+
+```text
+server advertise/messageData     upstream -> aggregator -> Studio
+Studio subscribe/unsubscribe     Studio -> aggregator -> owning upstream
+Studio clientPublish ros1        Studio -> aggregator -> ROS1 bridge
+Studio clientPublish non-ros1    Studio -> aggregator -> matching/default custom
+Studio fetchAsset package://...  Studio -> aggregator -> matching/default custom
+```
+
 ## Install
 
 ```bash
@@ -13,7 +58,7 @@ sudo apt install ros-noetic-foxglove-bridge -y
 
 ## Run
 
-Only ROS1 bridge:
+Only ROS1 foxglove bridge:
 
 ```bash
 roslaunch --screen foxglove_bridge foxglove_bridge.launch port:=18766
@@ -30,7 +75,7 @@ python3 aggregator.py \
   --default-custom custom_a
 ```
 
-YAML config:
+YAML config (ROS1 foxglove bridge + custom servers):
 
 ```bash
 python3 aggregator.py --config config.example.yaml
@@ -39,7 +84,7 @@ python3 aggregator.py --config config.example.yaml
 Foxglove Studio connects to:
 
 ```text
-ws://<host>:18765
+ws://127.0.0.1:8765
 ```
 
 URDF layer URL:

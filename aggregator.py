@@ -49,7 +49,7 @@ class CustomConfig:
 
 @dataclass
 class AppConfig:
-    listen: str = "0.0.0.0:18765"
+    listen: str = "0.0.0.0:8765"
     ros_url: str | None = None
     custom: list[CustomConfig] = field(default_factory=list)
     default_custom: str | None = None
@@ -689,7 +689,7 @@ def package_name_from_uri(uri: str) -> str | None:
 def parse_listen(value: str) -> tuple[str, int]:
     if "://" in value:
         parsed = urlparse(value)
-        return parsed.hostname or "0.0.0.0", parsed.port or 18765
+        return parsed.hostname or "0.0.0.0", parsed.port or 8765
     host, port = value.rsplit(":", 1)
     return host, int(port)
 
@@ -740,7 +740,7 @@ def load_config(args: argparse.Namespace) -> AppConfig:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="YAML config file")
-    parser.add_argument("--listen", help="Listen address, e.g. 0.0.0.0:18765")
+    parser.add_argument("--listen", help="Listen address, e.g. 0.0.0.0:8765")
     parser.add_argument("--ros", help="ROS1 foxglove_bridge URL")
     parser.add_argument("--custom", action="append", help="Custom upstream as name=ws://host:port")
     parser.add_argument("--default-custom", help="Default custom upstream name")
