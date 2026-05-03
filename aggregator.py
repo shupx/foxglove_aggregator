@@ -200,21 +200,16 @@ class Aggregator:
 
     def server_capabilities(self) -> list[str]:
         capabilities: list[str] = []
-        if any(
-            upstream.connected and "clientPublish" in upstream.capabilities
-            for upstream in self.upstreams.values()
-        ):
+        if self.upstreams:
             capabilities.append("clientPublish")
         if self.config.custom or self.config.local_asset_root:
             capabilities.append("assets")
         return capabilities
 
     def supported_encodings(self) -> list[str]:
-        encodings: set[str] = set()
-        for upstream in self.upstreams.values():
-            if not upstream.connected or "clientPublish" not in upstream.capabilities:
-                continue
-            encodings.update(upstream.supported_encodings)
+        if not self.upstreams:
+            return []
+        encodings = {"json", "protobuf", "flatbuffer", "ros1"}
         return sorted(encodings)
 
     async def serve(self) -> None:
