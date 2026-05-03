@@ -108,4 +108,4 @@ The example custom server publishes 3D-friendly topics:
 - Assets: `fetchAsset` routes by `package://<package>/...` prefix to custom servers, then default custom, then optional local asset root.
 - Optional/no upstreams: the aggregator still starts and reports clear status errors for unsupported routes.
 
-Parameters, services, and connection graph aggregation are intentionally not implemented in v1.
+Parameters, services, and connection graph aggregation are intentionally not implemented in the current version of aggregator.
