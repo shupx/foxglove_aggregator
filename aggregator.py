@@ -75,6 +75,14 @@ class SubscriptionRef:
 
 
 @dataclass
+class SharedSubscriptionRef:
+    upstream: str
+    frontend_channel_id: int
+    upstream_subscription_id: int
+    frontend_subscribers: set[tuple[int, int]] = field(default_factory=set)
+
+
+@dataclass
 class ClientPublishRef:
     client_id: int
     upstream: str
@@ -187,7 +195,8 @@ class Aggregator:
         self.upstreams: dict[str, Upstream] = {}
         self.frontend_clients: dict[int, FrontendClient] = {}
         self.channels_by_frontend_id: dict[int, ChannelRef] = {}
-        self.subscriptions_by_upstream_id: dict[tuple[str, int], SubscriptionRef] = {}
+        self.shared_subscriptions_by_upstream_id: dict[tuple[str, int], SharedSubscriptionRef] = {}
+        self.shared_subscriptions_by_channel: dict[tuple[str, int], SharedSubscriptionRef] = {}
         self.subscriptions_by_frontend_id: dict[tuple[int, int], SubscriptionRef] = {}
         self.frontend_channel_ids = IdAllocator(1)
         self.frontend_client_ids = IdAllocator(1)
@@ -290,9 +299,17 @@ class Aggregator:
         async with self._lock:
             for key, ref in list(self.subscriptions_by_frontend_id.items()):
                 if ref.client_id == client.id:
-                    to_unsubscribe.setdefault(ref.upstream, []).append(ref.upstream_subscription_id)
+                    shared_key = (ref.upstream, ref.frontend_channel_id)
+                    shared_ref = self.shared_subscriptions_by_channel.get(shared_key)
+                    if shared_ref is not None:
+                        shared_ref.frontend_subscribers.discard((ref.client_id, ref.frontend_subscription_id))
+                        if not shared_ref.frontend_subscribers:
+                            self.shared_subscriptions_by_channel.pop(shared_key, None)
+                            self.shared_subscriptions_by_upstream_id.pop(
+                                (ref.upstream, ref.upstream_subscription_id), None
+                            )
+                            to_unsubscribe.setdefault(ref.upstream, []).append(ref.upstream_subscription_id)
                     self.subscriptions_by_frontend_id.pop(key, None)
-                    self.subscriptions_by_upstream_id.pop((ref.upstream, ref.upstream_subscription_id), None)
             for upstream in self.upstreams.values():
                 for ref in list(upstream.client_publish_by_frontend_id.values()):
                     if ref.client_id == client.id:
@@ -356,7 +373,24 @@ class Aggregator:
                     await client.send_json(status("error", f"Unknown channel id {frontend_channel_id}"))
                     continue
                 upstream = self.upstreams[channel_ref.upstream]
-                upstream_subscription_id = upstream.subscription_ids.next()
+                shared_key = (upstream.name, frontend_channel_id)
+                shared_ref = self.shared_subscriptions_by_channel.get(shared_key)
+                if shared_ref is None:
+                    upstream_subscription_id = upstream.subscription_ids.next()
+                    shared_ref = SharedSubscriptionRef(
+                        upstream=upstream.name,
+                        frontend_channel_id=frontend_channel_id,
+                        upstream_subscription_id=upstream_subscription_id,
+                    )
+                    self.shared_subscriptions_by_channel[shared_key] = shared_ref
+                    self.shared_subscriptions_by_upstream_id[
+                        (upstream.name, upstream_subscription_id)
+                    ] = shared_ref
+                    by_upstream.setdefault(upstream.name, []).append(
+                        {"id": upstream_subscription_id, "channelId": channel_ref.upstream_channel_id}
+                    )
+                else:
+                    upstream_subscription_id = shared_ref.upstream_subscription_id
                 ref = SubscriptionRef(
                     client_id=client.id,
                     upstream=upstream.name,
@@ -365,10 +399,7 @@ class Aggregator:
                     frontend_channel_id=frontend_channel_id,
                 )
                 self.subscriptions_by_frontend_id[(client.id, frontend_subscription_id)] = ref
-                self.subscriptions_by_upstream_id[(upstream.name, upstream_subscription_id)] = ref
-                by_upstream.setdefault(upstream.name, []).append(
-                    {"id": upstream_subscription_id, "channelId": channel_ref.upstream_channel_id}
-                )
+                shared_ref.frontend_subscribers.add((client.id, frontend_subscription_id))
 
         for upstream_name, subscriptions in by_upstream.items():
             upstream = self.upstreams[upstream_name]
@@ -383,8 +414,15 @@ class Aggregator:
                 ref = self.subscriptions_by_frontend_id.pop(key, None)
                 if ref is None:
                     continue
-                self.subscriptions_by_upstream_id.pop((ref.upstream, ref.upstream_subscription_id), None)
-                by_upstream.setdefault(ref.upstream, []).append(ref.upstream_subscription_id)
+                shared_key = (ref.upstream, ref.frontend_channel_id)
+                shared_ref = self.shared_subscriptions_by_channel.get(shared_key)
+                if shared_ref is None:
+                    continue
+                shared_ref.frontend_subscribers.discard((ref.client_id, ref.frontend_subscription_id))
+                if not shared_ref.frontend_subscribers:
+                    self.shared_subscriptions_by_channel.pop(shared_key, None)
+                    self.shared_subscriptions_by_upstream_id.pop((ref.upstream, ref.upstream_subscription_id), None)
+                    by_upstream.setdefault(ref.upstream, []).append(ref.upstream_subscription_id)
 
         for upstream_name, subscription_ids in by_upstream.items():
             upstream = self.upstreams.get(upstream_name)
@@ -557,15 +595,16 @@ class Aggregator:
             logging.warning("malformed messageData from %s", upstream.name)
             return
         upstream_subscription_id = struct.unpack_from("<I", data, 1)[0]
-        ref = self.subscriptions_by_upstream_id.get((upstream.name, upstream_subscription_id))
-        if ref is None:
+        shared_ref = self.shared_subscriptions_by_upstream_id.get((upstream.name, upstream_subscription_id))
+        if shared_ref is None:
             return
-        client = self.frontend_clients.get(ref.client_id)
-        if client is None:
-            return
-        rewritten = bytearray(data)
-        struct.pack_into("<I", rewritten, 1, ref.frontend_subscription_id)
-        await client.send_binary(bytes(rewritten))
+        for client_id, frontend_subscription_id in list(shared_ref.frontend_subscribers):
+            client = self.frontend_clients.get(client_id)
+            if client is None:
+                continue
+            rewritten = bytearray(data)
+            struct.pack_into("<I", rewritten, 1, frontend_subscription_id)
+            await client.send_binary(bytes(rewritten))
 
     async def forward_fetch_asset_response(self, upstream: Upstream, data: bytes) -> None:
         if len(data) < 10:
@@ -595,10 +634,12 @@ class Aggregator:
                 frontend_channel_ids.append(ref.frontend_channel_id)
             upstream.channels_by_upstream_id.clear()
 
-            for key, ref in list(self.subscriptions_by_upstream_id.items()):
+            for key, ref in list(self.shared_subscriptions_by_upstream_id.items()):
                 if ref.upstream == upstream.name:
-                    self.subscriptions_by_upstream_id.pop(key, None)
-                    self.subscriptions_by_frontend_id.pop((ref.client_id, ref.frontend_subscription_id), None)
+                    self.shared_subscriptions_by_upstream_id.pop(key, None)
+                    self.shared_subscriptions_by_channel.pop((ref.upstream, ref.frontend_channel_id), None)
+                    for client_id, frontend_subscription_id in ref.frontend_subscribers:
+                        self.subscriptions_by_frontend_id.pop((client_id, frontend_subscription_id), None)
 
             upstream.subscription_ids_by_frontend.clear()
             upstream.client_publish_by_frontend_id.clear()
