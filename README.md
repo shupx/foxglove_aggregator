@@ -76,6 +76,27 @@ Launch the aggregator with a YAML config (relay ROS1 foxglove bridge + custom se
 python3 aggregator.py --config config.example.yaml
 ```
 
+## Custom Routing Config
+
+Each custom server entry defines how the aggregator routes requests that do not already belong to
+an advertised upstream channel:
+
+```yaml
+custom:
+  - name: "custom_a"
+    url: "ws://127.0.0.1:18767"
+    topic_prefixes: ["/custom_a/"]
+    package_prefixes: ["custom_a_description"]
+    default: true
+```
+
+- `name`: unique upstream name, used in logs and `--default-custom`.
+- `topic_prefixes`: routes non-`ros1` `clientPublish` topics, e.g. `/custom_a/cmd`.
+- `package_prefixes`: routes `fetchAsset` for `package://custom_a_description/...`.
+- `default: true`: fallback custom server for unmatched non-`ros1` publish and asset requests.
+
+`encoding == "ros1"` client publish always routes to the ROS1 bridge when configured and connected.
+
 Foxglove Studio connects to:
 
 ```text
