@@ -58,24 +58,19 @@ sudo apt install ros-noetic-foxglove-bridge -y
 
 ## Run
 
-Only ROS1 foxglove bridge:
+Launch ROS1 foxglove bridge:
 
 ```bash
-roslaunch --screen foxglove_bridge foxglove_bridge.launch port:=18766
-python3 aggregator.py --listen 127.0.0.1:8765 --ros ws://127.0.0.1:18766
+roslaunch foxglove_bridge foxglove_bridge.launch port:=18766
 ```
 
-Only custom servers:
+Launch a custom server:
 
 ```bash
 python3 examples/custom_a_server.py
-python3 aggregator.py \
-  --listen 127.0.0.1:8765 \
-  --custom custom_a=ws://127.0.0.1:18767 \
-  --default-custom custom_a
 ```
 
-YAML config (ROS1 foxglove bridge + custom servers):
+Launch the aggregator with a YAML config (relay ROS1 foxglove bridge + custom servers):
 
 ```bash
 python3 aggregator.py --config config.example.yaml
@@ -101,7 +96,7 @@ The example custom server publishes 3D-friendly topics:
 /custom_a/tf       foxglove.FrameTransforms
 ```
 
-## Supported v1 Behavior
+## Supported Behavior
 
 - Server channel aggregation: `advertise`, `unadvertise`, `subscribe`, `unsubscribe`, `messageData`.
 - Client publish routing: `encoding == "ros1"` routes to ROS bridge; otherwise topic prefix/default custom.
