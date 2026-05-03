@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import json
 import logging
 import math
 import time
@@ -7,8 +6,20 @@ from pathlib import Path
 from typing import Optional
 
 import foxglove
-from foxglove import Channel, Schema
-from foxglove.messages import FrameTransform, FrameTransforms, Quaternion, Timestamp, Vector3
+from foxglove.messages import (
+    ArrowPrimitive,
+    Color,
+    CubePrimitive,
+    FrameTransform,
+    FrameTransforms,
+    Pose,
+    PoseInFrame,
+    Quaternion,
+    SceneEntity,
+    SceneUpdate,
+    Timestamp,
+    Vector3,
+)
 
 ASSET_ROOT = Path(__file__).parent / "assets"
 PACKAGE_NAME = "custom_a_description"
@@ -38,38 +49,74 @@ def main() -> None:
     foxglove.set_log_level(logging.INFO)
     server = foxglove.start_server(port=18767, asset_handler=asset_handler)
 
-    example = Channel(
-        topic="/custom_a/example",
-        message_encoding="json",
-        schema=Schema(
-            name="custom.Example",
-            encoding="jsonschema",
-            data=json.dumps(
-                {
-                    "type": "object",
-                    "properties": {
-                        "stamp": {"type": "number"},
-                        "value": {"type": "number"},
-                    },
-                }
-            ).encode("utf-8"),
-        ),
-    )
-
     try:
         while True:
             now = time.time()
-            example.log(json.dumps({"stamp": now, "value": math.sin(now)}).encode("utf-8"))
+            stamp = Timestamp.from_epoch_secs(now)
+            yaw = now
+            position = Vector3(x=2.0 * math.cos(now), y=2.0 * math.sin(now), z=0.8)
+            orientation = yaw_to_quaternion(yaw)
+            pose = Pose(
+                position=position,
+                orientation=orientation,
+            )
+
+            foxglove.log(
+                "/custom_a/pose",
+                PoseInFrame(
+                    timestamp=stamp,
+                    frame_id="map",
+                    pose=pose,
+                ),
+            )
+
+            foxglove.log(
+                "/custom_a/markers",
+                SceneUpdate(
+                    entities=[
+                        SceneEntity(
+                            timestamp=stamp,
+                            frame_id="map",
+                            id="moving_cube",
+                            frame_locked=True,
+                            cubes=[
+                                CubePrimitive(
+                                    pose=pose,
+                                    size=Vector3(x=0.6, y=0.35, z=0.25),
+                                    color=Color(r=0.1, g=0.45, b=0.9, a=1.0),
+                                )
+                            ],
+                        ),
+                        SceneEntity(
+                            timestamp=stamp,
+                            frame_id="map",
+                            id="heading_arrow",
+                            frame_locked=True,
+                            arrows=[
+                                ArrowPrimitive(
+                                    pose=pose,
+                                    shaft_length=0.8,
+                                    shaft_diameter=0.05,
+                                    head_length=0.25,
+                                    head_diameter=0.16,
+                                    color=Color(r=1.0, g=0.45, b=0.05, a=1.0),
+                                )
+                            ],
+                        ),
+                    ]
+                ),
+            )
+
             foxglove.log(
                 "/custom_a/tf",
                 FrameTransforms(
                     transforms=[
                         FrameTransform(
-                            timestamp=Timestamp.from_epoch_secs(now),
-                            parent_frame_id="world",
-                            child_frame_id="base_link",
-                            translation=Vector3(x=0, y=0, z=0),
-                            rotation=yaw_to_quaternion(now),
+                            timestamp=stamp,
+                            parent_frame_id="map",
+                            child_frame_id="uav1/base_link",
+                            translation=position,
+                            rotation=orientation,
                         )
                     ]
                 ),

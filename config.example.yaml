@@ -1,4 +1,4 @@
-listen: "0.0.0.0:18765"
+listen: "127.0.0.1:8765"
 
 ros:
   enabled: true
@@ -11,8 +11,8 @@ custom:
     package_prefixes: ["custom_a_description"]
     default: true
 
-  - name: "custom_b"
-    url: "ws://127.0.0.1:18768"
-    topic_prefixes: ["/custom_b/"]
-    package_prefixes: ["custom_b_description"]
+  # - name: "custom_b"
+  #   url: "ws://127.0.0.1:18768"
+  #   topic_prefixes: ["/custom_b/"]
+  #   package_prefixes: ["custom_b_description"]
 
