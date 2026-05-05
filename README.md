@@ -116,12 +116,37 @@ The example custom server publishes 3D-friendly topics:
 /custom_a/markers  foxglove.SceneUpdate
 /custom_a/tf       foxglove.FrameTransforms
 ```
-
 ## Supported Behavior
 
 - Server channel aggregation: `advertise`, `unadvertise`, `subscribe`, `unsubscribe`, `messageData`.
 - Client publish routing: `encoding == "ros1"` routes to ROS bridge; otherwise topic prefix/default custom.
 - Assets: `fetchAsset` routes by `package://<package>/...` prefix to custom servers, then default custom, then optional local asset root.
+- Optional lifecycle webhook: frontend connection-count changes are sent to `lifecycle_hook_url`.
 - Optional/no upstreams: the aggregator still starts and reports clear status errors for unsupported routes.
 
 Parameters, services, and connection graph aggregation are intentionally not implemented in the current version of aggregator.
+
+
+## Frontend Lifecycle Hook
+
+The aggregator can optionally post frontend connection-count changes to an HTTP webhook. This is
+plain HTTP and is not part of the Foxglove WebSocket protocol. If `lifecycle_hook_url` is omitted,
+the aggregator does not send lifecycle events.
+
+```yaml
+lifecycle_hook_url: "http://127.0.0.1:19287/lifecycle"
+```
+
+The webhook receives JSON like:
+
+```json
+{
+  "event": "frontend_client_count_changed",
+  "client_count": 0,
+  "timestamp": 1777890000.123
+}
+```
+
+This is intended for optional coordination, such as clearing external display state after the last
+Foxglove Studio client disconnects. The aggregator only reports the event; the webhook server owns
+any cleanup policy.

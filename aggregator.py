@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib import request
 from urllib.parse import urlparse
 
 import websockets
@@ -54,6 +55,7 @@ class AppConfig:
     custom: list[CustomConfig] = field(default_factory=list)
     default_custom: str | None = None
     local_asset_root: Path | None = None
+    lifecycle_hook_url: str | None = None
 
 
 @dataclass
@@ -257,6 +259,7 @@ class Aggregator:
         client = FrontendClient(self.frontend_client_ids.next(), ws)
         self.frontend_clients[client.id] = client
         logging.info("frontend client %s connected", client.id)
+        self.notify_frontend_client_count_changed()
         try:
             # send once when a client (foxglove studio) connects.
             await client.send_json(
@@ -293,6 +296,7 @@ class Aggregator:
 
     async def frontend_disconnected(self, client: FrontendClient) -> None:
         self.frontend_clients.pop(client.id, None)
+        self.notify_frontend_client_count_changed()
 
         to_unsubscribe: dict[str, list[int]] = {}
         to_unadvertise: dict[str, list[int]] = {}
@@ -327,6 +331,31 @@ class Aggregator:
             upstream = self.upstreams.get(upstream_name)
             if upstream and channel_ids:
                 await upstream.send_json({"op": "unadvertise", "channelIds": channel_ids})
+
+    def notify_frontend_client_count_changed(self) -> None:
+        if not self.config.lifecycle_hook_url:
+            return
+        payload = {
+            "event": "frontend_client_count_changed",
+            "client_count": len(self.frontend_clients),
+            "timestamp": time.time(),
+        }
+        asyncio.create_task(self.post_lifecycle_event(payload))
+
+    async def post_lifecycle_event(self, payload: dict[str, Any]) -> None:
+        url = self.config.lifecycle_hook_url
+        if not url:
+            return
+        try:
+            await asyncio.to_thread(post_json, url, payload)
+            logging.info(
+                "posted lifecycle event %s client_count=%s to %s",
+                payload.get("event"),
+                payload.get("client_count"),
+                url,
+            )
+        except Exception:
+            logging.exception("failed to post lifecycle event to %s", url)
 
     async def handle_frontend_message(self, client: FrontendClient, message: str | bytes) -> None:
         if isinstance(message, bytes):
@@ -731,6 +760,18 @@ def status(level: str, message: str) -> dict[str, Any]:
     return {"op": "status", "level": levels[level], "message": message}
 
 
+def post_json(url: str, payload: dict[str, Any]) -> None:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    req = request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=2.0) as response:
+        response.read()
+
+
 def encode_fetch_asset_success(request_id: int, data: bytes) -> bytes:
     return bytes([SERVER_BINARY_FETCH_ASSET_RESPONSE]) + struct.pack("<IBI", request_id, 0, 0) + data
 
@@ -784,6 +825,7 @@ def load_config(args: argparse.Namespace) -> AppConfig:
         cfg.default_custom = raw.get("default_custom")
         if raw.get("local_asset_root"):
             cfg.local_asset_root = Path(raw["local_asset_root"]).resolve()
+        cfg.lifecycle_hook_url = raw.get("lifecycle_hook_url") or cfg.lifecycle_hook_url
 
     if args.listen:
         cfg.listen = args.listen
@@ -795,6 +837,8 @@ def load_config(args: argparse.Namespace) -> AppConfig:
         cfg.default_custom = args.default_custom
     if args.local_asset_root:
         cfg.local_asset_root = Path(args.local_asset_root).resolve()
+    if args.lifecycle_hook_url:
+        cfg.lifecycle_hook_url = args.lifecycle_hook_url
     return cfg
 
 
@@ -806,6 +850,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--custom", action="append", help="Custom upstream as name=ws://host:port")
     parser.add_argument("--default-custom", help="Default custom upstream name")
     parser.add_argument("--local-asset-root", help="Optional local package:// asset root")
+    parser.add_argument("--lifecycle-hook-url", help="Optional HTTP webhook for frontend lifecycle events")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 

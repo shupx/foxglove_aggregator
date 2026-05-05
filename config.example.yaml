@@ -1,4 +1,5 @@
 listen: "127.0.0.1:8765"
+# lifecycle_hook_url: "http://127.0.0.1:19287/lifecycle"
 
 ros:
   enabled: true
@@ -15,4 +16,3 @@ custom:
   #   url: "ws://127.0.0.1:18768"
   #   topic_prefixes: ["/custom_b/"]
   #   package_prefixes: ["custom_b_description"]
-
