@@ -146,6 +146,7 @@ class Upstream:
         self.asset_request_ids = IdAllocator(1)
         self.capabilities: list[str] = []
         self.supported_encodings: list[str] = []
+        self.metadata: dict[str, str] = {}
 
     async def run_forever(self) -> None:
         while True:
@@ -222,15 +223,13 @@ class Aggregator:
     def supported_encodings(self) -> list[str]:
         if not self.upstreams:
             return []
-        encodings = {"json", "protobuf", "flatbuffer", "ros1"}
+        encodings = {encoding for upstream in self.upstreams.values()
+                     for encoding in upstream.supported_encodings}
         return sorted(encodings)
 
     def server_metadata(self) -> dict[str, str]:
-        if self.upstreams.get("ros"):
-            # Important to report this supports ROS1 for foxglove studio client to configure ROS1-compatible features like click tools in the 3D panel.
-            return {"ROS_DISTRO": "noetic"}
-        else:
-            return {}
+        upstream = self.upstreams.get("ros")
+        return dict(upstream.metadata) if upstream else {}
 
     async def serve(self) -> None:
         host, port = parse_listen(self.config.listen)
@@ -557,6 +556,11 @@ class Aggregator:
             print(f"\n\033[032mReceived upstream '{upstream.name}' serverInfo: {payload}\033[0m\n")
             upstream.capabilities = list(payload.get("capabilities", []))
             upstream.supported_encodings = list(payload.get("supportedEncodings", []))
+            upstream.metadata = dict(payload.get("metadata", {}))
+            await self.broadcast_json({"op": "serverInfo", "name": "Aivuda Foxglove aggregator",
+                                       "capabilities": self.server_capabilities(),
+                                       "supportedEncodings": self.supported_encodings(),
+                                       "metadata": self.server_metadata()})
             logging.info("upstream %s serverInfo capabilities=%s", upstream.name, payload.get("capabilities", []))
         elif op == "advertise":
             await self.handle_upstream_advertise(upstream, payload)
@@ -701,7 +705,7 @@ class Aggregator:
             self.frontend_clients.pop(client_id, None)
 
     def route_client_publish(self, channel: dict[str, Any]) -> Upstream | None:
-        if channel.get("encoding") == "ros1":
+        if channel.get("encoding") in {"ros1", "cdr"} or "/msg/" in str(channel.get("schemaName", "")):
             ros = self.upstreams.get("ros")
             return ros if ros and ros.connected else None
 
